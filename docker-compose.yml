@@ -1,0 +1,27 @@
+services:
+  bot:
+    build: .
+    image: bot-atendimento-triagem:latest
+    container_name: bot-atendimento
+    restart: unless-stopped
+
+    # Carrega todas as variáveis do .env (Chatwoot, LLM, STT, etiquetas, etc.).
+    env_file:
+      - .env
+
+    # Sobrescreve o que precisa estar fixo no container, independente do .env:
+    # o SQLite vai para o volume persistente (/data), não para o diretório local.
+    environment:
+      DB_PATH: /data/bot.db
+
+    # Mapeia a porta usando o PORT do .env (default 8080). O compose lê o .env
+    # do diretório do projeto para resolver ${PORT} aqui.
+    ports:
+      - "8085:8080"
+
+    # Persiste o banco entre recriações do container.
+    volumes:
+      - bot-data:/data
+
+volumes:
+  bot-data:

@@ -1,0 +1,26 @@
+# Git / metadados
+.git
+.gitignore
+.claude
+
+# Segredos e banco local (NÃO devem entrar na imagem)
+.env
+*.db
+*.db-wal
+*.db-shm
+
+# Binários e artefatos de teste
+bot
+cmd/bot/bot
+*.out
+coverage.html
+
+# Docs e scripts não necessários no build
+README.md
+TASKS.md
+scripts
+
+# Os próprios arquivos de container
+Dockerfile
+docker-compose.yml
+.dockerignore
