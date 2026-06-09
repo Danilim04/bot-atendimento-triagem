@@ -83,8 +83,22 @@ log "Baixando ${URL}"
 fetch_to "$URL" "${TMP}/${TARBALL}"
 
 # --- checksum SHA-256 -------------------------------------------------------
+# O checksum oficial vem da API JSON (go.dev não serve mais arquivos .sha256).
+sha256_oficial() {
+  local json
+  json="$(fetch 'https://go.dev/dl/?mode=json' 2>/dev/null)" || return 1
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$json" | jq -r ".[].files[] | select(.filename==\"${TARBALL}\") | .sha256" | head -n1
+  else
+    printf '%s' "$json" \
+      | grep -A6 "\"filename\": \"${TARBALL}\"" \
+      | grep -m1 '"sha256"' \
+      | sed -E 's/.*"sha256": *"([0-9a-f]+)".*/\1/'
+  fi
+}
+
 log "Verificando checksum SHA-256..."
-EXPECTED="$(fetch "${URL}.sha256" 2>/dev/null | awk '{print $1}' || true)"
+EXPECTED="$(sha256_oficial || true)"
 if [ -n "$EXPECTED" ]; then
   if command -v sha256sum >/dev/null 2>&1; then
     ACTUAL="$(sha256sum "${TMP}/${TARBALL}" | awk '{print $1}')"
@@ -95,7 +109,7 @@ if [ -n "$EXPECTED" ]; then
     warn "sha256sum/shasum não encontrado — pulando verificação."
   fi
   if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-    die "checksum inválido!\n  esperado: ${EXPECTED}\n  obtido:   ${ACTUAL}"
+    die "$(printf 'checksum inválido!\n  esperado: %s\n  obtido:   %s' "$EXPECTED" "$ACTUAL")"
   fi
   [ -n "$ACTUAL" ] && log "Checksum confere."
 else
