@@ -70,10 +70,30 @@ type MessageCreated struct {
 	Private           bool            `json:"private"`
 	ContentType       string          `json:"content_type"`
 	ContentAttributes json.RawMessage `json:"content_attributes"`
+	Attachments       []Attachment    `json:"attachments"`
 	Sender            Sender          `json:"sender"`
 	Conversation      Conversation    `json:"conversation"`
 	Account           Account         `json:"account"`
 	Inbox             Inbox           `json:"inbox"`
+}
+
+// Attachment é um anexo de uma mensagem (áudio, imagem, arquivo, vídeo...). O
+// Chatwoot envia file_type indicando a natureza e data_url com a URL do arquivo.
+type Attachment struct {
+	ID        int64  `json:"id"`
+	FileType  string `json:"file_type"` // "audio" | "image" | "video" | "file" | ...
+	DataURL   string `json:"data_url"`
+	Extension string `json:"extension"`
+}
+
+// FirstAudioAttachment devolve o primeiro anexo de áudio da mensagem, se houver.
+func (m *MessageCreated) FirstAudioAttachment() (Attachment, bool) {
+	for _, a := range m.Attachments {
+		if a.FileType == "audio" {
+			return a, true
+		}
+	}
+	return Attachment{}, false
 }
 
 // ConversationUpdated representa o evento conversation_updated. No payload do

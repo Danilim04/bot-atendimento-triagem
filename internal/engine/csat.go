@@ -25,6 +25,10 @@ var csatOptions = []chatwoot.SelectOption{
 // startCSAT assume a conversa ao detectar a etiqueta de CSAT: envia o pedido de
 // nota e registra o prazo de 5 minutos.
 func (e *Engine) startCSAT(ctx context.Context, conv *chatwoot.Conversation) {
+	// Serializa o processamento desta conversa (ver lockConv): evita reabrir o CSAT
+	// em webhooks concorrentes.
+	defer e.lockConv(conv.ID)()
+
 	st := e.getState(ctx, conv.ID)
 	// Idempotência: um único ciclo de CSAT por etiqueta. Webhooks concorrentes que
 	// ainda carregam a etiqueta fila-csat — em especial o conversation_updated
@@ -55,6 +59,9 @@ func (e *Engine) startCSAT(ctx context.Context, conv *chatwoot.Conversation) {
 
 // handleCSATAnswer processa a resposta do cliente dentro da janela de tempo.
 func (e *Engine) handleCSATAnswer(ctx context.Context, conv *chatwoot.Conversation, content string) {
+	// Serializa o processamento desta conversa (ver lockConv).
+	defer e.lockConv(conv.ID)()
+
 	st := e.getState(ctx, conv.ID)
 	if st == nil || st.State != store.StateCSATPending {
 		return // não estamos aguardando nota nesta conversa

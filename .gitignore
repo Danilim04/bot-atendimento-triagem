@@ -1,0 +1,18 @@
+# Binários
+/bot
+/cmd/bot/bot
+
+# Banco SQLite local
+*.db
+*.db-wal
+*.db-shm
+
+# Ambiente
+.env
+
+# Cobertura de testes
+*.out
+coverage.html
+
+# Configuração local do Claude Code
+.claude/

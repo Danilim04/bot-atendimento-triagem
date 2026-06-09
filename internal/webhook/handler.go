@@ -1,9 +1,10 @@
-// Package webhook recebe os eventos do Chatwoot, valida assinatura, deduplica e
+// Package webhook recebe os eventos do Chatwoot, autentica a origem, deduplica e
 // despacha o processamento para um pool de workers.
 package webhook
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -22,6 +23,7 @@ type Engine interface {
 // Server recebe webhooks e os enfileira para processamento assíncrono.
 type Server struct {
 	secret  string
+	token   string
 	store   store.Store
 	engine  Engine
 	log     *slog.Logger
@@ -36,8 +38,10 @@ type job struct {
 
 const maxBodyBytes = 2 << 20 // 2 MiB
 
-// NewServer cria o servidor de webhooks.
-func NewServer(secret string, st store.Store, eng Engine, log *slog.Logger, workers, queueSize int) *Server {
+// NewServer cria o servidor de webhooks. secret habilita a verificação HMAC
+// (X-Chatwoot-Signature); token exige um segredo na query da URL (?token=...),
+// útil quando o Chatwoot não assina os payloads.
+func NewServer(secret, token string, st store.Store, eng Engine, log *slog.Logger, workers, queueSize int) *Server {
 	if workers <= 0 {
 		workers = 4
 	}
@@ -46,6 +50,7 @@ func NewServer(secret string, st store.Store, eng Engine, log *slog.Logger, work
 	}
 	return &Server{
 		secret:  secret,
+		token:   token,
 		store:   st,
 		engine:  eng,
 		log:     log,
@@ -59,6 +64,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Token compartilhado na URL (?token=...). É a autenticação prática quando o
+	// Chatwoot não assina os payloads. Comparação em tempo constante.
+	if s.token != "" {
+		provided := r.URL.Query().Get("token")
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) != 1 {
+			s.log.Warn("token de webhook inválido", "remote", r.RemoteAddr)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))

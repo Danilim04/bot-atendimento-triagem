@@ -12,18 +12,32 @@ import (
 
 // Config agrega todos os parâmetros de execução do bot.
 type Config struct {
-	Port     string
-	LogLevel string // debug | info | warn | error
+	Port          string
+	LogLevel      string // debug | info | warn | error
+	PublicBaseURL string // URL pública do bot (ex.: https://bot.exemplo.com), só para montar a URL do webhook nos logs
 
 	ChatwootBaseURL   string
 	ChatwootAccountID string
 	ChatwootAPIToken  string
 	WebhookSecret     string
+	WebhookToken      string // token compartilhado exigido na query da URL do webhook (?token=...)
 
 	LLMBaseURL string
 	LLMAPIKey  string
 	LLMModel   string
 	LLMTimeout time.Duration
+
+	// STT (speech-to-text) para transcrever áudios. Habilitado quando STTBaseURL e
+	// STTModel estão definidos.
+	STTBaseURL  string
+	STTAPIKey   string
+	STTModel    string
+	STTLanguage string
+	STTTimeout  time.Duration
+
+	// DebounceWindow é a janela de silêncio para agrupar mensagens do cliente em
+	// rajada antes de processar a triagem. <=0 desliga (processa imediatamente).
+	DebounceWindow time.Duration
 
 	DBPath string
 
@@ -47,13 +61,19 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:               getenv("PORT", "8080"),
 		LogLevel:           strings.ToLower(getenv("LOG_LEVEL", "info")),
+		PublicBaseURL:      strings.TrimRight(getenv("PUBLIC_BASE_URL", ""), "/"),
 		ChatwootBaseURL:    strings.TrimRight(getenv("CHATWOOT_BASE_URL", ""), "/"),
 		ChatwootAccountID:  getenv("CHATWOOT_ACCOUNT_ID", ""),
 		ChatwootAPIToken:   getenv("CHATWOOT_API_TOKEN", ""),
 		WebhookSecret:      getenv("WEBHOOK_SECRET", ""),
+		WebhookToken:       getenv("WEBHOOK_TOKEN", ""),
 		LLMBaseURL:         strings.TrimRight(getenv("LLM_BASE_URL", "https://api.openai.com/v1"), "/"),
 		LLMAPIKey:          getenv("LLM_API_KEY", ""),
 		LLMModel:           getenv("LLM_MODEL", "gpt-4o-mini"),
+		STTBaseURL:         strings.TrimRight(getenv("STT_BASE_URL", ""), "/"),
+		STTAPIKey:          getenv("STT_API_KEY", ""),
+		STTModel:           getenv("STT_MODEL", ""),
+		STTLanguage:        getenv("STT_LANGUAGE", "pt"),
 		DBPath:             getenv("DB_PATH", "bot.db"),
 		LabelBot:           getenv("LABEL_BOT", "fila-bot"),
 		LabelCSAT:          getenv("LABEL_CSAT", "fila-csat"),
@@ -69,6 +89,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.LLMTimeout, err = parseDuration(getenv("LLM_TIMEOUT", "30s")); err != nil {
 		return nil, fmt.Errorf("LLM_TIMEOUT inválido: %w", err)
+	}
+	if cfg.STTTimeout, err = parseDuration(getenv("STT_TIMEOUT", "60s")); err != nil {
+		return nil, fmt.Errorf("STT_TIMEOUT inválido: %w", err)
+	}
+	if cfg.DebounceWindow, err = parseDuration(getenv("DEBOUNCE_WINDOW", "8s")); err != nil {
+		return nil, fmt.Errorf("DEBOUNCE_WINDOW inválido: %w", err)
 	}
 	if cfg.ReaperInterval, err = parseDuration(getenv("REAPER_INTERVAL", "15s")); err != nil {
 		return nil, fmt.Errorf("REAPER_INTERVAL inválido: %w", err)
@@ -89,6 +115,11 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// STTEnabled informa se a transcrição de áudio está configurada.
+func (c *Config) STTEnabled() bool {
+	return c.STTBaseURL != "" && c.STTModel != ""
 }
 
 // SectorLabel devolve a etiqueta configurada para um setor retornado pelo LLM,

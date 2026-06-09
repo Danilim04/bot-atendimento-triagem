@@ -118,7 +118,7 @@ func newTestEngineWith(t *testing.T, cw *fakeChatwoot, classifier llm.Classifier
 
 	client := chatwoot.NewClient(cfg.ChatwootBaseURL, cfg.ChatwootAccountID, cfg.ChatwootAPIToken)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	eng, err := New(cfg, st, client, classifier, log)
+	eng, err := New(cfg, st, client, classifier, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +198,7 @@ func TestTriage_UnknownSectorFallsBackToDefault(t *testing.T) {
 	msg := &chatwoot.MessageCreated{
 		MessageType:  chatwoot.MessageIncoming,
 		Sender:       chatwoot.Sender{Type: "contact"},
+		Content:      "preciso de um setor que não existe",
 		Conversation: chatwoot.Conversation{ID: 1, AccountID: 1, Labels: []string{"fila-bot"}},
 	}
 	eng.HandleMessageCreated(context.Background(), msg)

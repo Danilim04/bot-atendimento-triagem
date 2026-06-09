@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// maxAttachmentBytes limita o tamanho de um anexo baixado (ex.: áudio para STT).
+const maxAttachmentBytes = 25 << 20 // 25 MiB
 
 // Client é o cliente REST de saída para a Application API do Chatwoot.
 type Client struct {
@@ -95,6 +99,39 @@ func (c *Client) ToggleStatus(ctx context.Context, convID int64, status string) 
 func (c *Client) SetCustomAttributes(ctx context.Context, convID int64, attrs map[string]any) error {
 	body := map[string]any{"custom_attributes": attrs}
 	return c.do(ctx, http.MethodPost, c.convPath(convID, "/custom_attributes"), body, nil)
+}
+
+// DownloadAttachment baixa o conteúdo de um anexo (ex.: áudio) a partir da sua
+// data_url. URLs públicas de ActiveStorage ignoram o header de auth; o token é
+// enviado mesmo assim para instâncias que exijam autenticação. Devolve os bytes e
+// o Content-Type da resposta.
+func (c *Client) DownloadAttachment(ctx context.Context, rawURL string) ([]byte, string, error) {
+	url := rawURL
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = c.baseURL + rawURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("api_access_token", c.token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("download anexo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, "", fmt.Errorf("download anexo %s: status %d: %s", url, resp.StatusCode, b)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentBytes))
+	if err != nil {
+		return nil, "", fmt.Errorf("ler anexo: %w", err)
+	}
+	return data, resp.Header.Get("Content-Type"), nil
 }
 
 // do executa a requisição com (de)serialização JSON e retries em erros

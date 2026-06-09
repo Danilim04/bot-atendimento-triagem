@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -47,13 +48,25 @@ func main() {
 	cw := chatwoot.NewClient(cfg.ChatwootBaseURL, cfg.ChatwootAccountID, cfg.ChatwootAPIToken)
 	classifier := llm.NewOpenAI(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMTimeout, log)
 
-	eng, err := engine.New(cfg, st, cw, classifier, log)
+	var transcriber llm.Transcriber
+	if cfg.STTEnabled() {
+		transcriber = llm.NewOpenAITranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log)
+		log.Info("transcrição de áudio habilitada", "stt_model", cfg.STTModel, "stt_endpoint", cfg.STTBaseURL)
+	} else {
+		log.Info("transcrição de áudio desabilitada (STT_BASE_URL/STT_MODEL não definidos)")
+	}
+
+	eng, err := engine.New(cfg, st, cw, classifier, transcriber, log)
 	if err != nil {
 		log.Error("inicializar engine", "err", err)
 		os.Exit(1)
 	}
 
-	srv := webhook.NewServer(cfg.WebhookSecret, st, eng, log, 4, 256)
+	if cfg.WebhookSecret == "" && cfg.WebhookToken == "" {
+		log.Warn("webhook SEM autenticação: defina WEBHOOK_TOKEN (token na URL ?token=...) ou WEBHOOK_SECRET; do contrário, qualquer um que alcance /webhook pode injetar eventos")
+	}
+	log.Info("configure este URL no webhook do Chatwoot (Settings → Integrations → Webhooks)", "url", webhookURL(cfg))
+	srv := webhook.NewServer(cfg.WebhookSecret, cfg.WebhookToken, st, eng, log, 4, 256)
 	reaper := scheduler.New(st, cw, cfg.ReaperInterval, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -91,6 +104,21 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
 	}
+}
+
+// webhookURL monta a URL que deve ser cadastrada no webhook do Chatwoot, incluindo
+// o token (?token=...) quando configurado. Usa PUBLIC_BASE_URL como host; se vazio,
+// emprega um placeholder para lembrar o operador de informar o domínio público.
+func webhookURL(cfg *config.Config) string {
+	base := cfg.PublicBaseURL
+	if base == "" {
+		base = "https://<seu-host>"
+	}
+	u := base + "/webhook"
+	if cfg.WebhookToken != "" {
+		u += "?token=" + url.QueryEscape(cfg.WebhookToken)
+	}
+	return u
 }
 
 // parseLogLevel converte o valor de LOG_LEVEL em um slog.Level (default: info).

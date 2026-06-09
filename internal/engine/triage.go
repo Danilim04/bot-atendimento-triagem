@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 
 	"bot-atendimento-promosystem/internal/chatwoot"
 	"bot-atendimento-promosystem/internal/llm"
@@ -16,6 +17,23 @@ const handoffFallback = "Obrigado! Já encaminhei o seu atendimento para o setor
 // askFallback é usado quando o modelo pede para responder mas não fornece texto.
 const askFallback = "Pode me dar mais detalhes sobre a sua necessidade?"
 
+// maxReplyLen limita o tamanho da mensagem enviada ao cliente. Defesa em
+// profundidade contra manipulação do modelo (ex.: prompt injection induzindo uma
+// resposta enorme); uma fala normal de triagem cabe com folga nesse limite.
+const maxReplyLen = 800
+
+// clampReply normaliza a mensagem do modelo antes de enviá-la ao cliente: remove
+// espaços nas bordas e trunca ao limite cortando em runas (não em bytes), para não
+// quebrar caracteres multibyte.
+func clampReply(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= maxReplyLen {
+		return s
+	}
+	return strings.TrimSpace(string(r[:maxReplyLen])) + "…"
+}
+
 // handleTriage conduz a triagem de uma conversa. customer é o conteúdo da mensagem
 // do cliente; nil indica uma entrada proativa (a etiqueta do bot foi aplicada antes
 // de qualquer mensagem), caso em que o modelo inicia cumprimentando.
@@ -24,6 +42,10 @@ const askFallback = "Pode me dar mais detalhes sobre a sua necessidade?"
 // executa a decisão e mantém os guarda-corpos (setor válido, fila padrão, disjuntor
 // de turnos e dedup de saudação via estado).
 func (e *Engine) handleTriage(ctx context.Context, conv *chatwoot.Conversation, customer *string) {
+	// Serializa o processamento desta conversa para fechar a janela read-check-act
+	// do estado (saudação/triagem duplicadas em webhooks concorrentes; ver lockConv).
+	defer e.lockConv(conv.ID)()
+
 	st := e.getState(ctx, conv.ID)
 	if st != nil && st.State == store.StateRouted {
 		e.log.Info("triagem ignorada: conversa já roteada", "conversation_id", conv.ID)
@@ -77,7 +99,7 @@ func (e *Engine) handleTriage(ctx context.Context, conv *chatwoot.Conversation, 
 		if !known {
 			e.log.Info("setor desconhecido do modelo, usando fila padrão", "conversation_id", conv.ID, "sector", intent.Sector)
 		}
-		msg := intent.Reply
+		msg := clampReply(intent.Reply)
 		if msg == "" {
 			msg = handoffFallback
 		}
@@ -86,7 +108,7 @@ func (e *Engine) handleTriage(ctx context.Context, conv *chatwoot.Conversation, 
 	}
 
 	// action = reply (inclui a saudação inicial).
-	reply := intent.Reply
+	reply := clampReply(intent.Reply)
 	if reply == "" {
 		reply = askFallback
 	}

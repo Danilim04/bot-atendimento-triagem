@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync"
 	"text/template"
+	"time"
 
 	"bot-atendimento-promosystem/internal/chatwoot"
 	"bot-atendimento-promosystem/internal/config"
@@ -33,15 +34,22 @@ const maxTriageTurns = 8
 // colisões apenas serializam conversas distintas ocasionalmente, o que é inofensivo.
 const convLockStripes = 64
 
+// debounceFlushTimeout limita o tempo de processamento da triagem disparada pelo
+// fim da janela de debounce (igual ao jobTimeout do worker pool). Necessário porque
+// o timer dispara depois que o contexto do worker original já foi cancelado.
+const debounceFlushTimeout = 60 * time.Second
+
 // Engine reúne as dependências e o estado pré-computado (system prompt).
 type Engine struct {
 	cfg          *config.Config
 	store        store.Store
 	cw           *chatwoot.Client
 	llm          llm.Classifier
+	transcriber  llm.Transcriber // pode ser nil quando o STT não está configurado
 	log          *slog.Logger
 	systemPrompt string
 	convLocks    [convLockStripes]sync.Mutex
+	debouncer    *debouncer
 }
 
 // lockConv serializa o processamento de eventos de uma mesma conversa e devolve a
@@ -63,19 +71,30 @@ type triageData struct {
 }
 
 // New constrói a engine, montando o system prompt com os setores configurados.
-func New(cfg *config.Config, st store.Store, cw *chatwoot.Client, classifier llm.Classifier, log *slog.Logger) (*Engine, error) {
+// transcriber pode ser nil para desabilitar a transcrição de áudio.
+func New(cfg *config.Config, st store.Store, cw *chatwoot.Client, classifier llm.Classifier, transcriber llm.Transcriber, log *slog.Logger) (*Engine, error) {
 	prompt, err := buildSystemPrompt(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{
+	e := &Engine{
 		cfg:          cfg,
 		store:        st,
 		cw:           cw,
 		llm:          classifier,
+		transcriber:  transcriber,
 		log:          log,
 		systemPrompt: prompt,
-	}, nil
+	}
+	// O debouncer entrega a triagem agrupada já fora do worker original, então cria
+	// um contexto próprio (o contexto do worker já terá sido cancelado).
+	e.debouncer = newDebouncer(cfg.DebounceWindow, log, func(conv *chatwoot.Conversation, combined string) {
+		ctx, cancel := context.WithTimeout(context.Background(), debounceFlushTimeout)
+		defer cancel()
+		c := combined
+		e.handleTriage(ctx, conv, &c)
+	})
+	return e, nil
 }
 
 // HandleMessageCreated trata mensagens de entrada do cliente.
@@ -92,9 +111,9 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		return
 	}
 
-	// Serializa o processamento desta conversa para fechar a janela de corrida
-	// entre webhooks concorrentes (ver lockConv).
-	defer e.lockConv(convID)()
+	// O lock por conversa é adquirido dentro de cada folha (handleTriage,
+	// handleCSATAnswer, startCSAT), e não aqui no topo: a triagem pode rodar mais
+	// tarde, fora deste worker, quando entregue pelo debouncer (ver newDebouncer).
 
 	labels := msg.Conversation.Labels
 	switch {
@@ -103,8 +122,19 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		e.handleCSATAnswer(ctx, &msg.Conversation, msg.Content)
 	case chatwoot.HasLabel(labels, e.cfg.LabelBot):
 		e.log.Info("message_created → fluxo triagem", "conversation_id", convID, "labels", labels, "content", msg.Content)
-		content := msg.Content
-		e.handleTriage(ctx, &msg.Conversation, &content)
+		// Resolve o conteúdo (texto ou transcrição de áudio) antes de qualquer
+		// estado — I/O stateless, sem segurar o lock da conversa.
+		content, ok := e.resolveIncomingContent(ctx, msg)
+		if !ok {
+			return
+		}
+		if e.cfg.DebounceWindow <= 0 {
+			// Debounce desligado: processa imediatamente (comportamento legado).
+			e.handleTriage(ctx, &msg.Conversation, &content)
+			return
+		}
+		// Agrupa mensagens em rajada; a triagem roda ao fim da janela de silêncio.
+		e.debouncer.add(&msg.Conversation, content)
 	default:
 		e.log.Info("message_created ignorado: conversa sem etiqueta de controle",
 			"conversation_id", convID,
@@ -119,9 +149,8 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 func (e *Engine) HandleConversationUpdated(ctx context.Context, ev *chatwoot.ConversationUpdated) {
 	conv := &ev.Conversation
 
-	// Serializa o processamento desta conversa para fechar a janela de corrida
-	// entre webhooks concorrentes (ver lockConv).
-	defer e.lockConv(conv.ID)()
+	// O lock por conversa é adquirido dentro de cada folha (handleTriage, startCSAT);
+	// os guards spuriousLabelEntry abaixo são stateless e dispensam o lock.
 
 	labels := conv.Labels
 	switch {
