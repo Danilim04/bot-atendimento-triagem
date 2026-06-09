@@ -34,6 +34,7 @@ type Config struct {
 	STTModel    string
 	STTLanguage string
 	STTTimeout  time.Duration
+	STTStyle    string // "openai" (multipart, OpenAI/Groq) | "openrouter" (JSON + áudio em base64)
 
 	// DebounceWindow é a janela de silêncio para agrupar mensagens do cliente em
 	// rajada antes de processar a triagem. <=0 desliga (processa imediatamente).
@@ -74,6 +75,7 @@ func Load() (*Config, error) {
 		STTAPIKey:          getenv("STT_API_KEY", ""),
 		STTModel:           getenv("STT_MODEL", ""),
 		STTLanguage:        getenv("STT_LANGUAGE", "pt"),
+		STTStyle:           strings.ToLower(getenv("STT_STYLE", "openai")),
 		DBPath:             getenv("DB_PATH", "bot.db"),
 		LabelBot:           getenv("LABEL_BOT", "fila-bot"),
 		LabelCSAT:          getenv("LABEL_CSAT", "fila-csat"),

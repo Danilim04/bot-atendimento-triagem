@@ -50,8 +50,13 @@ func main() {
 
 	var transcriber llm.Transcriber
 	if cfg.STTEnabled() {
-		transcriber = llm.NewOpenAITranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log)
-		log.Info("transcrição de áudio habilitada", "stt_model", cfg.STTModel, "stt_endpoint", cfg.STTBaseURL)
+		switch cfg.STTStyle {
+		case "openrouter":
+			transcriber = llm.NewOpenRouterTranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log)
+		default:
+			transcriber = llm.NewOpenAITranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log)
+		}
+		log.Info("transcrição de áudio habilitada", "stt_style", cfg.STTStyle, "stt_model", cfg.STTModel, "stt_endpoint", cfg.STTBaseURL)
 	} else {
 		log.Info("transcrição de áudio desabilitada (STT_BASE_URL/STT_MODEL não definidos)")
 	}
