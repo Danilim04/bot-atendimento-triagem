@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"bot-atendimento-promosystem/internal/cost"
 )
 
 // OpenAIClassifier implementa Classifier sobre qualquer endpoint compatível com
@@ -20,10 +22,12 @@ type OpenAIClassifier struct {
 	model   string
 	http    *http.Client
 	log     *slog.Logger
+	cost    *cost.Tracker
 }
 
-// NewOpenAI cria um classificador OpenAI-compatible.
-func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration, log *slog.Logger) *OpenAIClassifier {
+// NewOpenAI cria um classificador OpenAI-compatible. tracker (opcional, pode ser
+// nil) acumula o custo reportado pelo provedor em usage.cost.
+func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration, log *slog.Logger, tracker *cost.Tracker) *OpenAIClassifier {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
@@ -36,6 +40,7 @@ func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration, log *slog.L
 		model:   model,
 		http:    &http.Client{Timeout: timeout},
 		log:     log,
+		cost:    tracker,
 	}
 }
 
@@ -55,6 +60,12 @@ type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int     `json:"prompt_tokens"`
+		CompletionTokens int     `json:"completion_tokens"`
+		TotalTokens      int     `json:"total_tokens"`
+		Cost             float64 `json:"cost"` // USD (OpenRouter devolve por padrão; 0 nos demais)
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -138,6 +149,12 @@ func (o *OpenAIClassifier) Classify(ctx context.Context, systemPrompt string, hi
 		return Intent{}, fmt.Errorf("intent inválido %q: %w", content, err)
 	}
 
+	var promptTok, complTok int
+	var costUSD float64
+	if cr.Usage != nil {
+		promptTok, complTok, costUSD = cr.Usage.PromptTokens, cr.Usage.CompletionTokens, cr.Usage.Cost
+	}
+
 	o.log.Info("llm: resposta do modelo",
 		"model", o.model,
 		"latency_ms", latency.Milliseconds(),
@@ -145,8 +162,12 @@ func (o *OpenAIClassifier) Classify(ctx context.Context, systemPrompt string, hi
 		"sector", intent.Sector,
 		"reply", intent.Reply,
 		"reason", intent.Reason,
+		"prompt_tokens", promptTok,
+		"completion_tokens", complTok,
+		"cost_usd", costUSD,
 		"raw", raw,
 	)
+	o.cost.Add("llm", costUSD)
 	return intent, nil
 }
 

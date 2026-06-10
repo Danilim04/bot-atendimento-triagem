@@ -15,6 +15,7 @@ import (
 
 	"bot-atendimento-promosystem/internal/chatwoot"
 	"bot-atendimento-promosystem/internal/config"
+	"bot-atendimento-promosystem/internal/cost"
 	"bot-atendimento-promosystem/internal/engine"
 	"bot-atendimento-promosystem/internal/llm"
 	"bot-atendimento-promosystem/internal/scheduler"
@@ -46,15 +47,16 @@ func main() {
 	defer st.Close()
 
 	cw := chatwoot.NewClient(cfg.ChatwootBaseURL, cfg.ChatwootAccountID, cfg.ChatwootAPIToken)
-	classifier := llm.NewOpenAI(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMTimeout, log)
+	costTracker := cost.New(log)
+	classifier := llm.NewOpenAI(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMTimeout, log, costTracker)
 
 	var transcriber llm.Transcriber
 	if cfg.STTEnabled() {
 		switch cfg.STTStyle {
 		case "openrouter":
-			transcriber = llm.NewOpenRouterTranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log)
+			transcriber = llm.NewOpenRouterTranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log, costTracker)
 		default:
-			transcriber = llm.NewOpenAITranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log)
+			transcriber = llm.NewOpenAITranscriber(cfg.STTBaseURL, cfg.STTAPIKey, cfg.STTModel, cfg.STTTimeout, log, costTracker)
 		}
 		log.Info("transcrição de áudio habilitada", "stt_style", cfg.STTStyle, "stt_model", cfg.STTModel, "stt_endpoint", cfg.STTBaseURL)
 	} else {
@@ -102,7 +104,7 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	log.Info("encerrando...")
+	log.Info("encerrando...", "custo_total_usd_sessao", costTracker.Total())
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

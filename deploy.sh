@@ -25,10 +25,6 @@ ENV_FILE="${ENV_FILE:-.env}"
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Swarm precisa estar ativo (docker swarm init, caso ainda não).
-docker info 2>/dev/null | grep -q 'Swarm: active' \
-  || die "Docker Swarm não está ativo neste nó. Rode: docker swarm init"
-
 # .env precisa existir; o caminho leva barra para o 'source' não procurar no PATH.
 [ -f "$ENV_FILE" ] || die "arquivo de ambiente não encontrado: $ENV_FILE"
 case "$ENV_FILE" in */*) ;; *) ENV_FILE="./$ENV_FILE" ;; esac

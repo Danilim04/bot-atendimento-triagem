@@ -40,7 +40,7 @@ ENV PORT=8080 \
     DB_PATH=/data/bot.db
 
 USER app
-EXPOSE 8085
+EXPOSE 8080
 
 # Forma shell para expandir $PORT em tempo de execução.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

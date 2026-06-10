@@ -13,6 +13,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"bot-atendimento-promosystem/internal/cost"
 )
 
 // Transcriber converte áudio em texto (speech-to-text).
@@ -31,10 +33,12 @@ type OpenAITranscriber struct {
 	model   string
 	http    *http.Client
 	log     *slog.Logger
+	cost    *cost.Tracker
 }
 
-// NewOpenAITranscriber cria um transcritor OpenAI-compatible.
-func NewOpenAITranscriber(baseURL, apiKey, model string, timeout time.Duration, log *slog.Logger) *OpenAITranscriber {
+// NewOpenAITranscriber cria um transcritor OpenAI-compatible. tracker (opcional,
+// pode ser nil) acumula o custo reportado pelo provedor em usage.cost.
+func NewOpenAITranscriber(baseURL, apiKey, model string, timeout time.Duration, log *slog.Logger, tracker *cost.Tracker) *OpenAITranscriber {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
@@ -47,6 +51,7 @@ func NewOpenAITranscriber(baseURL, apiKey, model string, timeout time.Duration, 
 		model:   model,
 		http:    &http.Client{Timeout: timeout},
 		log:     log,
+		cost:    tracker,
 	}
 }
 
@@ -109,6 +114,9 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, audio []byte, filena
 
 	var tr struct {
 		Text  string `json:"text"`
+		Usage *struct {
+			Cost float64 `json:"cost"` // USD (OpenRouter devolve por padrão; 0 nos demais)
+		} `json:"usage"`
 		Error *struct {
 			Message string `json:"message"`
 		} `json:"error"`
@@ -120,8 +128,13 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, audio []byte, filena
 		return "", fmt.Errorf("stt error: %s", tr.Error.Message)
 	}
 
+	var costUSD float64
+	if tr.Usage != nil {
+		costUSD = tr.Usage.Cost
+	}
 	text := strings.TrimSpace(tr.Text)
-	t.log.Info("stt: áudio transcrito", "model", t.model, "latency_ms", latency.Milliseconds(), "chars", len(text))
+	t.log.Info("stt: áudio transcrito", "model", t.model, "latency_ms", latency.Milliseconds(), "chars", len(text), "cost_usd", costUSD)
+	t.cost.Add("stt", costUSD)
 	return text, nil
 }
 
@@ -135,10 +148,12 @@ type OpenRouterTranscriber struct {
 	model   string
 	http    *http.Client
 	log     *slog.Logger
+	cost    *cost.Tracker
 }
 
 // NewOpenRouterTranscriber cria um transcritor para a API de STT do OpenRouter.
-func NewOpenRouterTranscriber(baseURL, apiKey, model string, timeout time.Duration, log *slog.Logger) *OpenRouterTranscriber {
+// tracker (opcional, pode ser nil) acumula o custo reportado em usage.cost.
+func NewOpenRouterTranscriber(baseURL, apiKey, model string, timeout time.Duration, log *slog.Logger, tracker *cost.Tracker) *OpenRouterTranscriber {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
@@ -151,6 +166,7 @@ func NewOpenRouterTranscriber(baseURL, apiKey, model string, timeout time.Durati
 		model:   model,
 		http:    &http.Client{Timeout: timeout},
 		log:     log,
+		cost:    tracker,
 	}
 }
 
@@ -204,6 +220,9 @@ func (t *OpenRouterTranscriber) Transcribe(ctx context.Context, audio []byte, fi
 
 	var tr struct {
 		Text  string `json:"text"`
+		Usage *struct {
+			Cost float64 `json:"cost"` // USD (OpenRouter devolve por padrão; 0 nos demais)
+		} `json:"usage"`
 		Error *struct {
 			Message string `json:"message"`
 		} `json:"error"`
@@ -215,8 +234,13 @@ func (t *OpenRouterTranscriber) Transcribe(ctx context.Context, audio []byte, fi
 		return "", fmt.Errorf("stt error: %s", tr.Error.Message)
 	}
 
+	var costUSD float64
+	if tr.Usage != nil {
+		costUSD = tr.Usage.Cost
+	}
 	text := strings.TrimSpace(tr.Text)
-	t.log.Info("stt: áudio transcrito", "model", t.model, "latency_ms", latency.Milliseconds(), "chars", len(text))
+	t.log.Info("stt: áudio transcrito", "model", t.model, "latency_ms", latency.Milliseconds(), "chars", len(text), "cost_usd", costUSD)
+	t.cost.Add("stt", costUSD)
 	return text, nil
 }
 

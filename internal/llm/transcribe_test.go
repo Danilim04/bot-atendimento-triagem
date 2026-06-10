@@ -39,7 +39,7 @@ func TestOpenAITranscriber_Transcribe(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr := NewOpenAITranscriber(srv.URL, "key", "whisper-large-v3", 5*time.Second, nil)
+	tr := NewOpenAITranscriber(srv.URL, "key", "whisper-large-v3", 5*time.Second, nil, nil)
 	text, err := tr.Transcribe(context.Background(), []byte("AUDIODATA"), "audio.ogg", "pt")
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
@@ -95,7 +95,7 @@ func TestOpenRouterTranscriber_Transcribe(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr := NewOpenRouterTranscriber(srv.URL, "key", "openai/whisper-large-v3", 5*time.Second, nil)
+	tr := NewOpenRouterTranscriber(srv.URL, "key", "openai/whisper-large-v3", 5*time.Second, nil, nil)
 	text, err := tr.Transcribe(context.Background(), []byte("AUDIODATA"), "audio.oga", "pt")
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
