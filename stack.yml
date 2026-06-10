@@ -1,0 +1,96 @@
+# Stack: bot-atendimento (triagem para o Chatwoot)
+# Deploy (Docker Swarm):  ./deploy.sh
+#   (faz build da imagem, exporta o .env para o ambiente e roda o stack deploy)
+#
+# Roteamento via Traefik no mesmo padrão do app.yml: labels em deploy.labels e
+# serviço na rede overlay externa app_net (a mesma do Traefik/Chatwoot). O TLS é
+# terminado no Traefik; o bot serve HTTP na porta 8080.
+#
+# As variáveis ${...} são interpoladas a partir do AMBIENTE (Swarm não lê .env);
+# o deploy.sh faz "set -a; source .env; set +a" antes do deploy.
+
+services:
+  bot:
+    image: bot-atendimento-triagem:latest
+    deploy:
+      mode: replicated
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.1"
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.bot.rule=Host(`${BOT_HOST:-bot-atendimento.oivox.com.br}`)"
+        - "traefik.http.routers.bot.entrypoints=websecure"
+        - "traefik.http.routers.bot.tls=true"
+        - "traefik.http.routers.bot.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.bot.service=bot"
+        - "traefik.http.services.bot.loadbalancer.server.port=8080"
+    environment:
+      # ----- Servidor (fixos do cluster) -----
+      PORT: "8080"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      PUBLIC_BASE_URL: "https://${BOT_HOST:-bot-atendimento.oivox.com.br}"
+
+      # ----- Chatwoot -----
+      # Chamada interna pela overlay (alias definido no app.yml), sem sair pra internet.
+      CHATWOOT_BASE_URL: "http://chatwoot-internal:3000"
+      CHATWOOT_ACCOUNT_ID: "${CHATWOOT_ACCOUNT_ID:-1}"
+      CHATWOOT_API_TOKEN: "${CHATWOOT_API_TOKEN}"
+      WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
+      WEBHOOK_TOKEN: "${WEBHOOK_TOKEN}"
+
+      # ----- LLM (OpenAI-compatible) -----
+      LLM_BASE_URL: "${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
+      LLM_API_KEY: "${LLM_API_KEY}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-30s}"
+
+      # ----- STT / transcrição de áudio -----
+      STT_STYLE: "${STT_STYLE:-openrouter}"
+      STT_BASE_URL: "${STT_BASE_URL:-https://openrouter.ai/api/v1}"
+      STT_API_KEY: "${STT_API_KEY:-}"
+      STT_MODEL: "${STT_MODEL:-openai/whisper-large-v3-turbo}"
+      STT_LANGUAGE: "${STT_LANGUAGE:-pt}"
+      STT_TIMEOUT: "${STT_TIMEOUT:-60s}"
+
+      # ----- Etiquetas / setores -----
+      LABEL_BOT: "${LABEL_BOT:-atendimento-automático}"
+      LABEL_CSAT: "${LABEL_CSAT:-fila-csat}"
+      DEFAULT_SECTOR_LABEL: "${DEFAULT_SECTOR_LABEL:-suporte}"
+      SECTORS: "${SECTORS:-financeiro=financeiro,suporte=suporte,comercial=comercial}"
+
+      # ----- CSAT / Reaper -----
+      CSAT_TIMEOUT: "${CSAT_TIMEOUT:-5m}"
+      CSAT_ATTRIBUTE: "${CSAT_ATTRIBUTE:-csat_rating}"
+      REAPER_INTERVAL: "${REAPER_INTERVAL:-15s}"
+
+      # ----- Opcional -----
+      PROMPT_PATH: "${PROMPT_PATH:-}"
+
+      # ----- Persistência (volume do cluster) -----
+      DB_PATH: "/data/bot.db"
+    volumes:
+      - bot_data:/data
+    networks:
+      - app_net
+
+volumes:
+  bot_data:
+    name: bot_atendimento_data
+
+networks:
+  app_net:
+    external: true
