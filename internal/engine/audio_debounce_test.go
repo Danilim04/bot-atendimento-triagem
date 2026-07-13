@@ -140,6 +140,84 @@ func TestDebounce_GroupsRapidMessages(t *testing.T) {
 	}
 }
 
+// TestDebounce_MergesProactiveGreetingWithFirstMessage cobre a corrida que gerava
+// saudação dupla: numa conversa recém-aberta pelo cliente, o conversation_updated
+// (etiqueta do bot aplicada → saudação proativa) e o message_created (primeira
+// mensagem) chegam quase juntos. Ambos passam pela mesma janela de debounce, então
+// deve haver UMA única consulta ao modelo e UMA resposta, com a mensagem do cliente
+// como turno — nunca duas saudações.
+func TestDebounce_MergesProactiveGreetingWithFirstMessage(t *testing.T) {
+	cw := newFakeChatwoot()
+	defer cw.srv.Close()
+	clf := &recordingClassifier{intent: llm.Intent{Action: "reply", Reply: "Olá! Como posso ajudar?"}}
+	eng := newConfiguredEngine(t, cw, clf, nil, 50*time.Millisecond)
+
+	conv := chatwoot.Conversation{ID: 318, AccountID: 1, Labels: []string{"fila-bot"}}
+
+	// Primeira mensagem do cliente entra no debouncer.
+	eng.HandleMessageCreated(context.Background(), &chatwoot.MessageCreated{
+		MessageType:  chatwoot.MessageIncoming,
+		Sender:       chatwoot.Sender{Type: "contact"},
+		Content:      "Oi tudo bem?",
+		Conversation: conv,
+	})
+	// Gatilho proativo (etiqueta recém-aplicada) chega logo em seguida, dentro da janela.
+	eng.HandleConversationUpdated(context.Background(), &chatwoot.ConversationUpdated{
+		Conversation: conv,
+		ChangedAttributes: []map[string]chatwoot.ChangeValue{
+			{"labels": {CurrentValue: []byte(`["fila-bot"]`), PreviousValue: []byte(`[]`)}},
+		},
+	})
+
+	// Espera o flush completar (uma única resposta ao cliente).
+	waitFor(t, 2*time.Second, func() bool {
+		return len(cw.findAll(http.MethodPost, "/conversations/318/messages")) >= 1
+	})
+	// Dá folga para garantir que uma segunda resposta não apareça depois.
+	time.Sleep(150 * time.Millisecond)
+
+	calls, last := clf.snapshot()
+	if calls != 1 {
+		t.Fatalf("esperava 1 chamada ao LLM (gatilhos fundidos), got %d", calls)
+	}
+	if len(last) != 1 || last[0].Role != "customer" || last[0].Content != "Oi tudo bem?" {
+		t.Fatalf("esperava um único turno do cliente com a mensagem, got %+v", last)
+	}
+	if msgs := cw.findAll(http.MethodPost, "/conversations/318/messages"); len(msgs) != 1 {
+		t.Fatalf("esperava exatamente 1 resposta ao cliente (sem saudação dupla), got %d: %+v", len(msgs), msgs)
+	}
+}
+
+// TestDebounce_ProactiveGreetingAloneStillGreets garante que, quando a etiqueta é
+// aplicada numa conversa sem mensagem do cliente (o caso do atendente), a saudação
+// proativa ainda acontece ao fim da janela.
+func TestDebounce_ProactiveGreetingAloneStillGreets(t *testing.T) {
+	cw := newFakeChatwoot()
+	defer cw.srv.Close()
+	clf := &recordingClassifier{intent: llm.Intent{Action: "reply", Reply: "Olá! Sou o Claudio."}}
+	eng := newConfiguredEngine(t, cw, clf, nil, 50*time.Millisecond)
+
+	conv := chatwoot.Conversation{ID: 319, AccountID: 1, Labels: []string{"fila-bot"}}
+	eng.HandleConversationUpdated(context.Background(), &chatwoot.ConversationUpdated{
+		Conversation: conv,
+		ChangedAttributes: []map[string]chatwoot.ChangeValue{
+			{"labels": {CurrentValue: []byte(`["fila-bot"]`), PreviousValue: []byte(`[]`)}},
+		},
+	})
+
+	waitFor(t, 2*time.Second, func() bool {
+		return len(cw.findAll(http.MethodPost, "/conversations/319/messages")) == 1
+	})
+
+	calls, last := clf.snapshot()
+	if calls != 1 {
+		t.Fatalf("esperava 1 chamada ao LLM (saudação proativa), got %d", calls)
+	}
+	if len(last) != 0 {
+		t.Fatalf("saudação proativa não deve ter turnos do cliente, got %+v", last)
+	}
+}
+
 // TestTriage_TranscribesAudio cobre a resposta a áudio: uma mensagem só com anexo de
 // áudio é baixada, transcrita e o texto vira o turno do cliente na triagem.
 func TestTriage_TranscribesAudio(t *testing.T) {

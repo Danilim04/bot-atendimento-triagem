@@ -88,9 +88,14 @@ func New(cfg *config.Config, st store.Store, cw *chatwoot.Client, classifier llm
 	}
 	// O debouncer entrega a triagem agrupada já fora do worker original, então cria
 	// um contexto próprio (o contexto do worker já terá sido cancelado).
-	e.debouncer = newDebouncer(cfg.DebounceWindow, log, func(conv *chatwoot.Conversation, combined string) {
+	e.debouncer = newDebouncer(cfg.DebounceWindow, log, func(conv *chatwoot.Conversation, combined string, proactive bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), debounceFlushTimeout)
 		defer cancel()
+		if proactive {
+			// Janela encerrou sem mensagem do cliente: só a saudação proativa.
+			e.handleTriage(ctx, conv, nil)
+			return
+		}
 		c := combined
 		e.handleTriage(ctx, conv, &c)
 	})
@@ -169,7 +174,15 @@ func (e *Engine) HandleConversationUpdated(ctx context.Context, ev *chatwoot.Con
 			return
 		}
 		e.log.Info("conversation_updated → entrada de triagem (saudação proativa)", "conversation_id", conv.ID, "labels", labels)
-		e.handleTriage(ctx, conv, nil)
+		if e.cfg.DebounceWindow <= 0 {
+			// Debounce desligado: sauda imediatamente (comportamento legado).
+			e.handleTriage(ctx, conv, nil)
+			return
+		}
+		// Funde a saudação proativa na mesma janela das mensagens do cliente: se a
+		// primeira mensagem chegar dentro da janela, ela vira uma única triagem (que
+		// já cumprimenta), evitando a saudação dupla numa conversa recém-aberta.
+		e.debouncer.addProactive(conv)
 	default:
 		e.log.Info("conversation_updated ignorado: conversa sem etiqueta de controle",
 			"conversation_id", conv.ID,
