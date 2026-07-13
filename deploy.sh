@@ -48,6 +48,15 @@ set +a
 log "Subindo stack '${STACK_NAME}'..."
 docker stack deploy -c stack.yml "$STACK_NAME"
 
+# 4. Força a recriação da task com a imagem recém-buildada.
+# A tag :latest não tem digest de registry, então o 'stack deploy' não detecta
+# mudança e mantém o container antigo rodando o binário velho (reportando sucesso
+# assim mesmo). O --force recria a task usando a imagem local nova. Mantém-se o
+# stop-first padrão (não start-first) porque o bot assume UMA instância e usa
+# SQLite em bind mount — dois containers simultâneos disputariam o mesmo arquivo.
+log "Forçando recriação da task '${STACK_NAME}_bot' com a imagem nova..."
+docker service update --force "${STACK_NAME}_bot" >/dev/null
+
 log "Pronto. Acompanhe com:"
 printf '    docker stack services %s\n' "$STACK_NAME"
 printf '    docker service logs -f %s_bot\n' "$STACK_NAME"
